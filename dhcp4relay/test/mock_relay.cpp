@@ -516,7 +516,7 @@ TEST(DHCPMgrTest, initialize_config_listner) {
     dhcpMgr.initialize_config_listner();
     std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
     
-    swss::Table dhcp_table(config_db.get(), "DHCPV4_RELAY");
+    swss::Table dhcp_table(config_db.get(), CFG_DHCPv4_RELAY_TABLE);
     swss::Table intf_table(config_db.get(), "INTERFACE");
     swss::Table loopback_intf_table(config_db.get(), "LOOPBACK_INTERFACE");
     swss::Table portchannel_intf_table(config_db.get(), "PORTCHANNEL_INTERFACE");
@@ -606,8 +606,8 @@ TEST(DHCPMgrTest, dhcp_server_feature_enable) {
 
     swss::Table feature_table(config_db.get(), "FEATURE");
     swss::Table vlan_table(config_db.get(), "VLAN");
-    swss::Table dhcp_server_table(config_db.get(), "DHCP_SERVER_IPV4");
-    swss::Table dhcp_server_ip_table(state_db.get(), "DHCP_SERVER_IPV4_SERVER_IP");
+    swss::Table dhcp_server_table(config_db.get(), CFG_DHCPv4_SERVER_TABLE_NAME);
+    swss::Table dhcp_server_ip_table(state_db.get(), STATE_DHCPv4_SERVER_IPv4_SERVER_IP_TABLE);
 
     std::string vlan = "Vlan200";
     std::vector<std::pair<std::string, std::string>> enable_dhcp_server = {
