@@ -762,7 +762,6 @@ TEST(DHCPRelayTest, encode_relay_option_server_client_same_vrf) {
     phy_interface_alias_map["Ethernet12"] = "eth12";
 
     relay_config config = {};
-    config.config_db = config_db;
     config.phy_interface = "Ethernet12";
     config.vlan = "Vlan10";
     config.vrf = "Vrf01";
@@ -773,8 +772,8 @@ TEST(DHCPRelayTest, encode_relay_option_server_client_same_vrf) {
     config.vrf_selection_opt = "enable";
     vlan_vrf_map["Vlan10"] = "Vrf01";
 
-    hostname = "cisco";
-    host_mac_addr = "12:32:54:24:95:36";
+    m_config.hostname = "cisco";
+    m_config.host_mac_addr = "12:32:54:24:95:36";
 
     encode_relay_option(&dhcpLayer, &config);
 
@@ -793,7 +792,7 @@ TEST(DHCPRelayTest, encode_relay_option_server_client_same_vrf) {
     auto remote_id_ptr = decode_tlv((const uint8_t *)options_ptr, OPTION82_SUBOPT_REMOTE_ID,
                                remote_id_len, agent_option_size);
 
-    EXPECT_EQ(memcmp(host_mac_addr.c_str(), remote_id_ptr, 17), 0);
+    EXPECT_EQ(memcmp(m_config.host_mac_addr.c_str(), remote_id_ptr, 17), 0);
 
     uint8_t link_sel_len = 0;
     auto link_sel_ip_ptr = decode_tlv((const uint8_t *)options_ptr, OPTION82_SUBOPT_LINK_SELECTION,
