@@ -10,10 +10,7 @@ std::unordered_map<std::string, relay_config> vlans_copy;
 using namespace swss;
 #endif
 
-std::string host_mac_addr;
-std::string hostname = "sonic";
-uint32_t deployment_id;
-bool is_dualTor = false;
+metadata_config m_config;
 
 bool feature_dhcp_server_enabled = false;
 std::shared_ptr<swss::SubscriberStateTable> config_db_dhcp_server_ipv4_ptr = NULL;
@@ -173,12 +170,12 @@ void DHCPMgr::process_device_metadata_notification(std::deque<swss::KeyOpFieldsV
             std::string v = fvValue(field);
 
             if (f == "hostname") {
-                hostname = v;
+		m_config.hostname = v;
             } else if (f == "mac") {
                 std::transform(v.begin(), v.end(), v.begin(), ::tolower);
-                host_mac_addr = v;
+		m_config.host_mac_addr = v;
             } else if (f == "deployment_id") {
-                deployment_id = static_cast<uint32_t>(std::stoul(v));
+		m_config.deployment_id = static_cast<uint32_t>(std::stoul(v));
             } else if (f == "subtype") {
                 subtype_found = true;
                 subtype_value = v;
@@ -186,11 +183,11 @@ void DHCPMgr::process_device_metadata_notification(std::deque<swss::KeyOpFieldsV
 
             // Handle is_dualToR logic
             if (subtype_found && subtype_value == "DualToR") {
-                is_dualTor = true;
+                m_config.is_dualTor = true;
                 send_dualTor_event = true;
-            } else if (is_dualTor) {
+            } else if (m_config.is_dualTor) {
                 // Covers both 'subtype' deleted and any value other than "DualToR"
-                is_dualTor = false;
+                m_config.is_dualTor = false;
                 send_dualTor_event = true;
             }
 
@@ -203,7 +200,7 @@ void DHCPMgr::process_device_metadata_notification(std::deque<swss::KeyOpFieldsV
                     return;
                 }
 
-                if (is_dualTor) {
+                if (m_config.is_dualTor) {
                    relay_msg->is_add = true;
                 } else {
                    relay_msg->is_add = false;
@@ -220,8 +217,8 @@ void DHCPMgr::process_device_metadata_notification(std::deque<swss::KeyOpFieldsV
 	    }
         }
         /* Re-set hostname to default value if hostname is deleted */
-        if (hostname.length() == 0) {
-            hostname = "sonic";
+	if (m_config.hostname.length() == 0) {
+            m_config.hostname = "sonic";
         }
     }
 }
