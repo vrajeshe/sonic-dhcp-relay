@@ -104,7 +104,6 @@ struct relay_config {
     sockaddr_in link_address_netmask;
     sockaddr_in src_intf_sel_addr;
     uint32_t link_ifindex;
-    std::shared_ptr<swss::DBConnector> state_db;
     std::string vlan;
     std::string phy_interface;
     std::string vrf;  // This is server VRF.
@@ -118,7 +117,6 @@ struct relay_config {
     std::vector<sockaddr_in> servers_sock;
     bool is_interface_id;
     bool is_add;
-    std::shared_ptr<swss::DBConnector> config_db;
 };
 
 typedef enum {
@@ -155,6 +153,12 @@ struct port_config {
     std::string phy_interface;
     std::string alias;
     bool is_add;
+};
+struct metadata_config {
+    std::string host_mac_addr;
+    std::string hostname = "sonic";
+    uint32_t deployment_id;
+    bool is_dualTor;
 };
 
 /**
@@ -260,17 +264,6 @@ void signal_callback(evutil_socket_t fd, short event, void *arg);
 void shutdown_relay();
 
 /* Helper functions */
-
-/**
- * @code                std::string to_string(uint64_t count);
- *
- * @brief               convert uint64_t to string
- *
- * @param count         count of messages in counter
- *
- * @return              count in string
- */
-std::string to_string(uint64_t count);
 
 /**
  * @code                update_vlan_mapping(std::string vlan, bool is_add);

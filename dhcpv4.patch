@@ -1,0 +1,483 @@
+diff --git a/dhcp4relay/src/dhcp4relay.cpp b/dhcp4relay/src/dhcp4relay.cpp
+index 5876474..100e8a9 100644
+--- a/dhcp4relay/src/dhcp4relay.cpp
++++ b/dhcp4relay/src/dhcp4relay.cpp
+@@ -12,8 +12,6 @@
+ #include <signal.h>
+ #include <unistd.h>
+ 
+-#include <sstream>
+-
+ #include "configdb.h"
+ #include "dhcp4_sender.h"
+ #include "dhcp4relay_mgr.h"
+@@ -23,14 +21,9 @@
+ struct event_base *base;
+ struct event *ev_sigint;
+ struct event *ev_sigterm;
+-static std::string vlan_member = "VLAN_MEMBER|";
+-
+-extern std::string host_mac_addr;
+-extern std::string hostname;
+-extern uint32_t deployment_id;
+ extern bool feature_dhcp_server_enabled;
+ extern std::string global_dhcp_server_ip;
+-extern bool is_dualTor;
++extern metadata_config m_config;
+ 
+ static uint8_t client_recv_buffer[BUFFER_SIZE];
+ int config_pipe[2];
+@@ -103,21 +96,6 @@ using namespace swss;
+ std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector>("CONFIG_DB", 0);
+ 
+ std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector>("STATE_DB", 0);
+-/**
+- * @code                std::string to_string(uint64_t count);
+- *
+- * @brief               convert uint16_t to string
+- *
+- * @param count         count of messages in counter
+- *
+- * @return              count in string
+- */
+-std::string to_string(uint64_t count) {
+-    std::stringstream ss;
+-    ss << count;
+-    std::string count_value = ss.str();
+-    return count_value;
+-}
+ 
+ /**
+  * @code                sock_open(const struct sock_fprog *fprog);
+@@ -248,7 +226,7 @@ void prepare_relay_interface_config(relay_config &interface_config) {
+         return;
+     }
+ 
+-    if (is_dualTor) {
++    if (m_config.is_dualTor) {
+         /* If DualTor is enabled, we set source interface to "Loopback0"
+            and link_selection option will be enabled during encoding if is_dualTor is enabled */
+         interface_config.source_interface = "Loopback0";
+@@ -468,9 +446,9 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
+     /* | 1 | 4 | hostname:interface_alias:vlan | */
+     std::string circuit_id;
+     if (feature_dhcp_server_enabled) {
+-        circuit_id = hostname + ":" + intf_alias;
++        circuit_id = m_config.hostname + ":" + intf_alias;
+     } else {
+-        circuit_id = hostname + ":" + intf_alias + ":" + config->vlan;
++        circuit_id = m_config.hostname + ":" + intf_alias + ":" + config->vlan;
+     }
+     auto offset = encode_tlv(buf, OPTION82_SUBOPT_CIRCUIT_ID, circuit_id.length(),
+                              (uint8_t *)circuit_id.c_str());
+@@ -479,12 +457,12 @@ void encode_relay_option(pcpp::DhcpLayer *dhcp_pkt, relay_config *config) {
+     /* Encode remote ID sub-option */
+     /* | 2 | 6 | my_mac| */
+     offset = encode_tlv((buf + buf_offset), OPTION82_SUBOPT_REMOTE_ID,
+-                        MAC_ADDR_STR_LEN, (uint8_t *)(host_mac_addr.c_str()));
++                        MAC_ADDR_STR_LEN, (uint8_t *)(m_config.host_mac_addr.c_str()));
+     buf_offset += offset;
+ 
+     /* TODO: this sub-option should be set if source interface selection is enabled */
+     /* | 5 | 4 | ipv4 | */
+-    if (is_dualTor || config->link_selection_opt == "enable") {
++    if (m_config.is_dualTor || config->link_selection_opt == "enable") {
+         uint32_t link_sel_ip = ((config->link_address.sin_addr.s_addr) &
+                                 (config->link_address_netmask.sin_addr.s_addr));
+         offset = encode_tlv((buf + buf_offset), OPTION82_SUBOPT_LINK_SELECTION, sizeof(uint32_t),
+@@ -593,7 +571,7 @@ void from_client(pcpp::DhcpLayer *dhcp_pkt, relay_config &config) {
+     // Backward compatibility for deployment_id 8. If deployment_id is 8, use client interface IP as source IP
+     bool use_intf_ip_as_src_ip = false;
+     in_addr src_ip = {0};
+-    if (deployment_id == 8) {
++    if (m_config.deployment_id == 8) {
+         use_intf_ip_as_src_ip = true;
+         src_ip.s_addr = config.link_address.sin_addr.s_addr;
+     }
+@@ -1168,8 +1146,6 @@ void config_event_callback(evutil_socket_t fd, short event, void *arg) {
+                         /*If entry not exist then creating the entry with empty structure.*/
+                         (*vlans)[relay_msg->vlan] = relay_config{};
+                         (*vlans)[relay_msg->vlan].vlan = relay_msg->vlan;
+-                        (*vlans)[relay_msg->vlan].config_db = config_db;
+-                        (*vlans)[relay_msg->vlan].state_db = state_db;
+                         update_vlan_mapping(relay_msg->vlan, true);
+                         if (prepare_vlan_sockets((*vlans)[relay_msg->vlan]) == -1) {
+                             syslog(LOG_ERR, "[DHCPV4_RELAY] Failed to create Vlan listen socket");
+diff --git a/dhcp4relay/src/dhcp4relay.h b/dhcp4relay/src/dhcp4relay.h
+index 2577801..d43fd6c 100644
+--- a/dhcp4relay/src/dhcp4relay.h
++++ b/dhcp4relay/src/dhcp4relay.h
+@@ -104,7 +104,6 @@ struct relay_config {
+     sockaddr_in link_address_netmask;
+     sockaddr_in src_intf_sel_addr;
+     uint32_t link_ifindex;
+-    std::shared_ptr<swss::DBConnector> state_db;
+     std::string vlan;
+     std::string phy_interface;
+     std::string vrf;  // This is server VRF.
+@@ -118,7 +117,6 @@ struct relay_config {
+     std::vector<sockaddr_in> servers_sock;
+     bool is_interface_id;
+     bool is_add;
+-    std::shared_ptr<swss::DBConnector> config_db;
+ };
+ 
+ typedef enum {
+@@ -156,6 +154,12 @@ struct port_config {
+     std::string alias;
+     bool is_add;
+ };
++struct metadata_config {
++    std::string host_mac_addr;
++    std::string hostname = "sonic";
++    uint32_t deployment_id;
++    bool is_dualTor;
++};
+ 
+ /**
+  * @code                sock_open(const struct sock_fprog *fprog);
+@@ -261,17 +265,6 @@ void shutdown_relay();
+ 
+ /* Helper functions */
+ 
+-/**
+- * @code                std::string to_string(uint64_t count);
+- *
+- * @brief               convert uint64_t to string
+- *
+- * @param count         count of messages in counter
+- *
+- * @return              count in string
+- */
+-std::string to_string(uint64_t count);
+-
+ /**
+  * @code                update_vlan_mapping(std::string vlan, bool is_add);
+  *
+diff --git a/dhcp4relay/src/dhcp4relay_mgr.cpp b/dhcp4relay/src/dhcp4relay_mgr.cpp
+index d31c0f5..1dbe74a 100644
+--- a/dhcp4relay/src/dhcp4relay_mgr.cpp
++++ b/dhcp4relay/src/dhcp4relay_mgr.cpp
+@@ -10,10 +10,7 @@ std::unordered_map<std::string, relay_config> vlans_copy;
+ using namespace swss;
+ #endif
+ 
+-std::string host_mac_addr;
+-std::string hostname = "sonic";
+-uint32_t deployment_id;
+-bool is_dualTor = false;
++metadata_config m_config;
+ 
+ bool feature_dhcp_server_enabled = false;
+ std::shared_ptr<swss::SubscriberStateTable> config_db_dhcp_server_ipv4_ptr = NULL;
+@@ -173,12 +170,12 @@ void DHCPMgr::process_device_metadata_notification(std::deque<swss::KeyOpFieldsV
+             std::string v = fvValue(field);
+ 
+             if (f == "hostname") {
+-                hostname = v;
++		m_config.hostname = v;
+             } else if (f == "mac") {
+                 std::transform(v.begin(), v.end(), v.begin(), ::tolower);
+-                host_mac_addr = v;
++		m_config.host_mac_addr = v;
+             } else if (f == "deployment_id") {
+-                deployment_id = static_cast<uint32_t>(std::stoul(v));
++		m_config.deployment_id = static_cast<uint32_t>(std::stoul(v));
+             } else if (f == "subtype") {
+                 subtype_found = true;
+                 subtype_value = v;
+@@ -186,11 +183,11 @@ void DHCPMgr::process_device_metadata_notification(std::deque<swss::KeyOpFieldsV
+ 
+             // Handle is_dualToR logic
+             if (subtype_found && subtype_value == "DualToR") {
+-                is_dualTor = true;
++                m_config.is_dualTor = true;
+                 send_dualTor_event = true;
+-            } else if (is_dualTor) {
++            } else if (m_config.is_dualTor) {
+                 // Covers both 'subtype' deleted and any value other than "DualToR"
+-                is_dualTor = false;
++                m_config.is_dualTor = false;
+                 send_dualTor_event = true;
+             }
+ 
+@@ -203,7 +200,7 @@ void DHCPMgr::process_device_metadata_notification(std::deque<swss::KeyOpFieldsV
+                     return;
+                 }
+ 
+-                if (is_dualTor) {
++                if (m_config.is_dualTor) {
+                    relay_msg->is_add = true;
+                 } else {
+                    relay_msg->is_add = false;
+@@ -220,8 +217,8 @@ void DHCPMgr::process_device_metadata_notification(std::deque<swss::KeyOpFieldsV
+ 	    }
+         }
+         /* Re-set hostname to default value if hostname is deleted */
+-        if (hostname.length() == 0) {
+-            hostname = "sonic";
++	if (m_config.hostname.length() == 0) {
++            m_config.hostname = "sonic";
+         }
+     }
+ }
+diff --git a/dhcp4relay/test/mock_relay.cpp b/dhcp4relay/test/mock_relay.cpp
+index 6654eed..628b320 100644
+--- a/dhcp4relay/test/mock_relay.cpp
++++ b/dhcp4relay/test/mock_relay.cpp
+@@ -21,13 +21,6 @@
+ using namespace ::testing;
+ using namespace swss;
+ 
+-extern std::string host_mac_addr;
+-extern std::string hostname;
+-extern uint32_t deployment_id;
+-extern bool feature_dhcp_server_enabled;
+-extern std::unordered_map<std::string, relay_config> vlans_copy;
+-extern std::string global_dhcp_server_ip;
+-
+ MOCK_GLOBAL_FUNC1(getifaddrs, int(struct ifaddrs **));
+ MOCK_GLOBAL_FUNC1(freeifaddrs, void(struct ifaddrs *));
+ MOCK_GLOBAL_FUNC3(write, ssize_t(int, const void*, size_t));
+@@ -86,11 +79,6 @@ void FreeMockIfaddrs(struct ifaddrs *mock_ifaddrs) {
+     }
+ }
+ 
+-TEST(helper, to_string)
+-{
+-    EXPECT_EQ("0", to_string(0));
+-}
+-
+ TEST(EncodeDecodeTLV, EncodeAndDecode) {
+     uint8_t buffer[10] = {};
+     uint8_t value[3] = {0x11, 0x22, 0x33};
+@@ -112,8 +100,7 @@ TEST(EncodeDecodeTLV, EncodeAndDecode) {
+     EXPECT_EQ(decoded_value[2], 0x33);
+ }
+ 
+-TEST(sock, sock_open)
+-{ 
++TEST(sock, sock_open) {
+   struct sock_filter ether_relay_filter[] = {
+       { 0x6, 0, 0, 0x00040000 },
+   };
+@@ -124,8 +111,7 @@ TEST(sock, sock_open)
+   EXPECT_GE(sock_open(&ether_relay_fprog), 0);
+ }
+ 
+-TEST(sock, sock_open_invalid_filter)
+-{
++TEST(sock, sock_open_invalid_filter) {
+   const struct sock_fprog ether_relay_fprog = {0,{}};
+   EXPECT_EQ(sock_open(&ether_relay_fprog), -1);
+ }
+@@ -161,13 +147,12 @@ TEST(prepareConfig, prepare_relay_interface_config) {
+ 
+     EXPECT_EQ(interface_config.link_address.sin_addr.s_addr, inet_addr("192.168.1.1"));
+     EXPECT_EQ(interface_config.link_address_netmask.sin_addr.s_addr, inet_addr("255.255.255.0"));
+-    EXPECT_EQ(interface_config.src_intf_sel_addr.sin_addr.s_addr, inet_addr("192.168.1.2"));  // Now should pass!
++    EXPECT_EQ(interface_config.src_intf_sel_addr.sin_addr.s_addr, inet_addr("192.168.1.2"));
+ 
+     FreeMockIfaddrs(mock_ifaddrs);
+ }
+ 
+-TEST(prepareConfig, prepare_vlan_sockets)
+-{
++TEST(prepareConfig, prepare_vlan_sockets) {
+   struct relay_config config{};
+   config.link_address.sin_addr.s_addr = htonl(0x01010101);
+   struct iphdr ip_hdr;
+@@ -193,9 +178,7 @@ TEST(prepareConfig, prepare_vrf_sockets) {
+     vrf_sock_map.clear();
+ }
+ 
+-TEST(prepareConfig, update_vlan_mapping)
+-{
+-    std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
++TEST(prepareConfig, update_vlan_mapping) {
+     swss::Table vlan_member_table(config_db.get(), "VLAN_MEMBER");
+     swss::Table vlan_interface_table(config_db.get(), "VLAN_INTERFACE");
+ 
+@@ -231,8 +214,6 @@ TEST(relayConfig, handle_vlan_events) {
+                      .Times(AtLeast(1)) 
+                      .WillRepeatedly(Invoke(RealWrite));
+     std::unordered_map<std::string, relay_config> vlans;
+-    std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
+-    std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
+     
+     swss::Table vlan_member_table(config_db.get(), "VLAN_MEMBER");
+     swss::Table vlan_interface_table(config_db.get(), "VLAN_INTERFACE");
+@@ -257,8 +238,6 @@ TEST(relayConfig, handle_vlan_events) {
+     relay_config *config = new relay_config();
+     config->vlan = "Vlan200";
+     config->is_add = true;
+-    config->config_db = config_db;
+-    config->state_db = state_db;
+     config->source_interface = "Ethernet8";
+     config->servers = {"192.168.1.1","10.0.0.1"};
+     config->vrf = "default";
+@@ -405,7 +384,10 @@ TEST(relayConfig, handle_vlan_member_events) {
+ }
+ 
+ TEST(relayConfig, handle_vlan_interface_events) {
++    struct ifaddrs *mock_ifaddrs = CreateMockIfaddrs("192.168.5.5", "255.255.255.0", "Vlan100", "192.168.1.2", "Ethernet4");
+     int pipe_fds[2];
++    EXPECT_GLOBAL_CALL(getifaddrs, getifaddrs(_)).WillOnce(DoAll(testing::SetArgPointee<0>(mock_ifaddrs), Return(0)));
++    EXPECT_GLOBAL_CALL(freeifaddrs, freeifaddrs(_)).Times(1);
+     EXPECT_GLOBAL_CALL(write, write(_, _, _))
+                      .Times(AtLeast(1))
+                      .WillRepeatedly(Invoke(RealWrite));
+@@ -442,6 +424,8 @@ TEST(relayConfig, handle_vlan_interface_events) {
+     config_event_callback(pipe_fds[0], 0, &vlans);
+ 
+     EXPECT_GE(vlans["Vlan100"].client_sock, 0);
++    EXPECT_EQ(vlans["Vlan100"].link_address.sin_addr.s_addr, inet_addr("192.168.5.5"));
++    EXPECT_EQ(vlans["Vlan100"].link_address_netmask.sin_addr.s_addr, inet_addr("255.255.255.0"));
+ 
+     close(pipe_fds[0]);
+     close(pipe_fds[1]);
+@@ -514,7 +498,6 @@ TEST(DHCPMgrTest, initialize_config_listner) {
+                      .Times(AtLeast(1))
+                      .WillRepeatedly(Return(-1));
+     dhcpMgr.initialize_config_listner();
+-    std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
+     
+     swss::Table dhcp_table(config_db.get(), CFG_DHCPv4_RELAY_TABLE);
+     swss::Table intf_table(config_db.get(), "INTERFACE");
+@@ -601,7 +584,6 @@ TEST(DHCPMgrTest, dhcp_server_feature_enable) {
+                      .WillRepeatedly(Return(0));
+     dhcpMgr.initialize_config_listner();
+ 
+-    std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
+     std::shared_ptr<swss::DBConnector> state_db = std::make_shared<swss::DBConnector> ("STATE_DB", 0);
+ 
+     swss::Table feature_table(config_db.get(), "FEATURE");
+@@ -642,7 +624,6 @@ TEST(DHCPMgrTest, dhcp_server_feature_disable) {
+                      .Times(AtLeast(1))
+                      .WillRepeatedly(Return(0));
+     dhcpMgr.initialize_config_listner();
+-    std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
+ 
+     swss::Table feature_table(config_db.get(), "FEATURE");
+     std::vector<std::pair<std::string, std::string>> disable_dhcp_server = {
+@@ -663,7 +644,6 @@ TEST(DHCPMgrTest, dhcp_server_ip_modification) {
+                      .Times(AtLeast(1))
+                      .WillRepeatedly(Return(0));
+     global_dhcp_server_ip = "240.127.1.3";
+-    std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
+     std::deque<swss::KeyOpFieldsValuesTuple> entries;
+     swss::Select select;
+     entries.emplace_back("eth0", "SET", std::vector<swss::FieldValueTuple>{
+@@ -671,7 +651,7 @@ TEST(DHCPMgrTest, dhcp_server_ip_modification) {
+     });
+ 
+     dhcpMgr.process_dhcp_server_ipv4_ip_notification(entries, select, config_db);
+-     EXPECT_EQ(global_dhcp_server_ip, "240.127.1.2");
++    EXPECT_EQ(global_dhcp_server_ip, "240.127.1.2");
+ }
+ 
+ TEST(DHCPMgrTest, dhcp_server_ip_deletion) {
+@@ -679,7 +659,6 @@ TEST(DHCPMgrTest, dhcp_server_ip_deletion) {
+     EXPECT_GLOBAL_CALL(write, write(_, _, _))
+                      .Times(AtLeast(1))
+                      .WillRepeatedly(Return(0));
+-    std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
+     std::deque<swss::KeyOpFieldsValuesTuple> entries;
+     swss::Select select;
+     entries.emplace_back("eth0", "DEL", std::vector<swss::FieldValueTuple>{});
+@@ -709,7 +688,6 @@ TEST(DHCPRelayTest, encode_relay_option) {
+     phy_interface_alias_map["Ethernet12"] = "eth12";
+ 
+     relay_config config = {};
+-    config.config_db = config_db;
+     config.phy_interface = "Ethernet12";
+     config.vlan = "Vlan10";
+     config.link_selection_opt = "enable";
+@@ -719,8 +697,8 @@ TEST(DHCPRelayTest, encode_relay_option) {
+     config.vrf_selection_opt = "enable";
+     vlan_vrf_map["Vlan10"] = "Vrf01";
+ 
+-    hostname = "cisco";
+-    host_mac_addr = "12:32:54:24:95:36";
++    m_config.hostname = "cisco";
++    m_config.host_mac_addr = "12:32:54:24:95:36";
+ 
+     encode_relay_option(&dhcpLayer, &config);
+ 
+@@ -739,7 +717,7 @@ TEST(DHCPRelayTest, encode_relay_option) {
+     auto remote_id_ptr = decode_tlv((const uint8_t *)options_ptr, OPTION82_SUBOPT_REMOTE_ID,
+                                remote_id_len, agent_option_size);
+ 
+-    EXPECT_EQ(memcmp(host_mac_addr.c_str(), remote_id_ptr, 17), 0);
++    EXPECT_EQ(memcmp(m_config.host_mac_addr.c_str(), remote_id_ptr, 17), 0);
+ 
+     uint8_t link_sel_len = 0;
+     auto link_sel_ip_ptr = decode_tlv((const uint8_t *)options_ptr, OPTION82_SUBOPT_LINK_SELECTION,
+@@ -837,7 +815,6 @@ TEST(DHCPRelayTest, encode_relay_option_server_client_same_vrf) {
+ }
+ 
+ TEST(DHCPRelayTest, to_client) {
+-    std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
+     pcpp::EthLayer ethLayer(pcpp::MacAddress("00:13:72:25:fa:cd"), pcpp::MacAddress("00:e0:b1:49:39:02"));
+     std::unordered_map<std::string, relay_config> vlans;
+ 
+@@ -859,7 +836,6 @@ TEST(DHCPRelayTest, to_client) {
+     phy_interface_alias_map["Ethernet12"] = "eth12";
+ 
+     relay_config config = {};
+-    config.config_db = config_db;
+     config.phy_interface = "Ethernet12";
+     config.vlan = "Vlan10";
+     config.link_selection_opt = "enable";
+@@ -869,7 +845,7 @@ TEST(DHCPRelayTest, to_client) {
+     config.vrf_selection_opt = "enable";
+     vlan_vrf_map["Vlan10"] = "Vrf01";
+ 
+-    host_mac_addr = "12:32:54:24:95:36";
++    m_config.host_mac_addr = "12:32:54:24:95:36";
+     vlans["Vlan10"] = config;
+     encode_relay_option(&dhcpLayer, &config);
+ 
+@@ -888,7 +864,6 @@ TEST(DHCPRelayTest, to_client) {
+ }
+ 
+ TEST(DHCPRelayTest, from_client) {
+-    std::shared_ptr<swss::DBConnector> config_db = std::make_shared<swss::DBConnector> ("CONFIG_DB", 0);
+ 
+     pcpp::MacAddress clientMac(std::string("00:0e:86:11:c0:75"));
+     pcpp::DhcpLayer dhcpLayer(pcpp::DHCP_DISCOVER, clientMac);
+@@ -900,7 +875,6 @@ TEST(DHCPRelayTest, from_client) {
+     phy_interface_alias_map["Ethernet12"] = "eth12";
+ 
+     relay_config config = {};
+-    config.config_db = config_db;
+     config.phy_interface = "Ethernet12";
+     config.vlan = "Vlan10";
+     config.link_selection_opt = "enable";
+@@ -915,12 +889,9 @@ TEST(DHCPRelayTest, from_client) {
+     config.vrf_selection_opt = "enable";
+     vlan_vrf_map["Vlan10"] = "Vrf01";
+ 
+-    host_mac_addr = "12:32:54:24:95:36";
++    m_config.host_mac_addr = "12:32:54:24:95:36";
+     encode_relay_option(&dhcpLayer, &config);
+ 
+-   //struct ifaddrs *mock_ifaddrs = CreateMockIfaddrs("192.168.1.1", "255.255.255.0", "Vlan100", "192.168.1.2", "Ethernet4");
+-    //EXPECT_GLOBAL_CALL(getifaddrs, getifaddrs(_)).WillOnce(DoAll(testing::SetArgPointee<0>(mock_ifaddrs), Return(0)));
+-    //EXPECT_GLOBAL_CALL(freeifaddrs, freeifaddrs(_)).Times(1);
+     EXPECT_GLOBAL_CALL(send_udp, send_udp(_, _, _, _, _, _)).WillOnce([]
+ 		    (int sock, uint8_t* hdr, struct sockaddr_in target, uint32_t len, in_addr src_ip, bool use_src_ip) {
+         pcpp::dhcp_header* dhcp_hdr = (pcpp::dhcp_header*)hdr;
+diff --git a/dhcp4relay/test/mock_relay.h b/dhcp4relay/test/mock_relay.h
+index 386dc41..0e88f78 100644
+--- a/dhcp4relay/test/mock_relay.h
++++ b/dhcp4relay/test/mock_relay.h
+@@ -17,3 +17,8 @@ extern swss::Select swssSelect;
+ extern std::unordered_map<std::string, VrfSocketInfo> vrf_sock_map;
+ extern std::unordered_map<std::string, std::string> phy_interface_alias_map;
+ extern std::vector<std::string> interface_list;
++extern metadata_config m_config;
++extern bool feature_dhcp_server_enabled;
++extern std::unordered_map<std::string, relay_config> vlans_copy;
++extern std::string global_dhcp_server_ip;
++extern std::shared_ptr<swss::DBConnector> config_db;
