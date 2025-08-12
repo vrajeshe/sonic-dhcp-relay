@@ -881,8 +881,8 @@ void pkt_in_callback(evutil_socket_t fd, short event, void *arg) {
         std::string intf(interface_name);
         auto itr = std::find(interface_list.begin(), interface_list.end(), intf);
         /* To avoid duplicate packets, we are only processing packets from
-           interface in PORT_TABLE and packets from VXLAN interface */
-        if ((itr == interface_list.end()) && (intf.rfind("VXLAN", 0) != 0)) {
+           interface in PORT_TABLE and packets from VXLAN and docker0 interfaces */
+        if ((itr == interface_list.end()) && (intf.rfind("VXLAN", 0) != 0) && (intf.rfind("docker0", 0) != 0)) {
             continue;
         }
 
